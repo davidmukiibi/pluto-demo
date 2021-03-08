@@ -1,0 +1,44 @@
+image: docker:latest
+services:
+  - docker:dind
+
+stages:
+  - build
+  - deploy
+
+variables:
+  DOCKER_IMAGE_TAG: gcr.io/kubernetes-practice-us/mark:$CI_COMMIT_SHA
+
+build_image:
+  stage: build
+  script:
+    - docker build --cache-from "${DOCKER_IMAGE_TAG}" -t "${DOCKER_IMAGE_TAG}" .
+    - echo "$SERVICE_ACCOUNT_KEY" > key.json
+    - docker login -u _json_key --password-stdin https://gcr.io < key.json
+    - docker push ${DOCKER_IMAGE_TAG}
+
+  only:
+    - master
+
+deploy_stage:
+  stage: deploy
+  image: ubuntu
+  environment:
+    name: develop
+  script:
+    - apt-get update && apt-get install lsb-core curl sudo -y
+    - curl -LO https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl
+    - chmod +x ./kubectl
+    - mv ./kubectl /usr/local/bin/kubectl
+    - export CLOUD_SDK_REPO="cloud-sdk-$(lsb_release -c -s)"
+    - echo "deb http://packages.cloud.google.com/apt $CLOUD_SDK_REPO main" | sudo tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
+    - curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+    - sudo apt-get update && sudo apt-get install google-cloud-sdk -y
+    - echo $SERVICE_ACCOUNT_KEY | gcloud auth activate-service-account --key-file=-
+    - gcloud --quiet config set project kubernetes-practice-us
+    - gcloud --quiet config set compute/zone us-central1-a
+    - gcloud container clusters get-credentials your-first-cluster-1 --zone us-central1-a --project kubernetes-practice-us
+    - kubectl set image deployment/stage-backend stage-backend=gcr.io/kubernetes-practice-us/mark:$CI_COMMIT_SHA --namespace stage
+
+  only:
+    - master
